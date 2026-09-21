@@ -1,126 +1,128 @@
+import { useEffect, useState } from "react";
 import "./styles.css";
+import {
+  defoam,
+  editParams,
+  EngineResult,
+  foamRetest,
+  ingestReading,
+  phRetest,
+  Reading,
+  reviewBatch,
+  setUrgent,
+  supplementTime,
+} from "./domain/engine";
+import { ProcessParams, StationState } from "./domain/types";
+import { loadOrSeed, resetState, saveState } from "./store/persistence";
+import { ArchivePanel } from "./components/ArchivePanel";
+import { BatchList } from "./components/BatchList";
+import { MonitorPanel } from "./components/MonitorPanel";
+import { QueuePanel } from "./components/QueuePanel";
+import { TimelinePanel } from "./components/TimelinePanel";
 
-const project = {
-  "sourceNo": 7,
-  "id": "hxyfront-62012",
-  "port": 62012,
-  "title": "纺织染整小样管理",
-  "domain": "纺织染整",
-  "prompt": "我需要一个纺织染整实验室的小样管理前端系统，可以记录面料成分、克重、染料配方、浴比、温度曲线、保温时间、后整理方式、色差值和评审结果。页面需要有小样批次列表、配方比例展示、Lab色差对比、工艺曲线摘要和按客户订单筛选。",
-  "palette": [
-    "#be123c",
-    "#4f46e5",
-    "#16a34a"
-  ],
-  "metrics": [
-    "小样批次",
-    "色差超限",
-    "客户订单",
-    "通过率"
-  ],
-  "filters": [
-    "棉",
-    "涤纶",
-    "锦纶",
-    "混纺"
-  ],
-  "fields": [
-    "面料成分",
-    "克重",
-    "染料配方",
-    "浴比",
-    "保温时间",
-    "色差值"
-  ],
-  "records": [
-    [
-      "LAB-620A",
-      "棉府绸120g",
-      "ΔE 0.84",
-      "评审通过"
-    ],
-    [
-      "LAB-621C",
-      "涤纶针织",
-      "升温曲线偏快",
-      "待复染"
-    ],
-    [
-      "LAB-624B",
-      "混纺斜纹",
-      "后整理柔软剂2%",
-      "客户确认中"
-    ]
-  ]
-};
+interface Notice {
+  kind: "ok" | "error";
+  text: string;
+}
 
 function App() {
+  const [state, setState] = useState<StationState>(loadOrSeed);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [selectedBatch, setSelectedBatch] = useState<string | null>(null);
+
+  // 持久化：任何状态变化整体落盘，刷新后列表/时间线/履历一致
+  useEffect(() => {
+    saveState(state);
+  }, [state]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  /** 所有页面操作统一经引擎计算，引擎抛出的规则校验错误直接提示 */
+  const run = (action: (at: number) => EngineResult) => {
+    try {
+      const result = action(Date.now());
+      setState(result.state);
+      setNotice({ kind: "ok", text: result.message });
+    } catch (err) {
+      setNotice({ kind: "error", text: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const openCount = state.exceptions.filter((e) => e.status === "open").length;
+  const urgentCount = state.exceptions.filter((e) => e.status === "open" && e.urgent).length;
+  const clearedCount = state.exceptions.filter((e) => e.status === "cleared").length;
+  const archivedCount = state.exceptions.filter((e) => e.status === "invalidated").length;
+
+  const metrics: Array<[string, number]> = [
+    ["待处置异常", openCount],
+    ["加急项", urgentCount],
+    ["已解除", clearedCount],
+    ["履历留档", archivedCount],
+  ];
+
   return (
     <main className="app">
       <section className="hero">
-        <p>{project.id} · 源提示词{project.sourceNo} · Port {project.port}</p>
-        <h1>{project.title}</h1>
-        <span>{project.prompt}</span>
+        <p>hxyfront-62012 · 源提示词7 · Port 62012</p>
+        <h1>染整小样异常放行台</h1>
+        <span>
+          温度连续三分钟偏离两度、酸碱值超出 4.5–7.5 或泡沫超限即生成待处置记录，批次不得评审；
+          异常按发生顺序解除——补时只解温度项，酸碱项须两次复测合格，泡沫项须排泡复测；
+          加急可插队首但不能跳过更早未闭环异常；解除后改参数，本项及后续结论失效，旧履历留档。
+        </span>
+        <div className="row-actions">
+          <button
+            onClick={() => {
+              if (window.confirm("确定重置为演示数据？当前全部记录将被清除。")) {
+                setState(resetState());
+                setNotice({ kind: "ok", text: "已重置为演示数据" });
+              }
+            }}
+          >
+            重置演示数据
+          </button>
+        </div>
       </section>
 
+      {notice && <div className={`notice ${notice.kind}`}>{notice.text}</div>}
+
       <section className="metrics">
-        {project.metrics.map((metric: string, index: number) => (
-          <article key={metric}>
-            <small>{metric}</small>
-            <strong>{[28, 6, 14, 91][index] ?? 10}</strong>
+        {metrics.map(([label, value]) => (
+          <article key={label}>
+            <small>{label}</small>
+            <strong>{value}</strong>
           </article>
         ))}
       </section>
 
       <section className="workspace">
-        <aside className="panel">
-          <h2>{project.domain}分类</h2>
-          <div className="chips">
-            {project.filters.map((item: string) => (
-              <button key={item}>{item}</button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel form-panel">
-          <div className="heading">
-            <div>
-              <p>专业字段</p>
-              <h2>新增记录</h2>
-            </div>
-            <button className="primary">保存记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
+        <BatchList
+          state={state}
+          selectedId={selectedBatch}
+          onSelect={setSelectedBatch}
+          onReview={(batchId, pass) => run((at) => reviewBatch(state, batchId, pass, at))}
+          onEditParams={(batchId: string, params: ProcessParams) => run((at) => editParams(state, batchId, params, at))}
+        />
+        <QueuePanel
+          state={state}
+          onSupplement={(id, minutes) => run((at) => supplementTime(state, id, minutes, at))}
+          onPhRetest={(id, value) => run((at) => phRetest(state, id, value, at))}
+          onDefoam={(id) => run((at) => defoam(state, id, at))}
+          onFoamRetest={(id, value) => run((at) => foamRetest(state, id, value, at))}
+          onToggleUrgent={(id, urgent) => run((at) => setUrgent(state, id, urgent, at))}
+        />
       </section>
 
-      <section className="panel">
-        <div className="heading">
-          <div>
-            <p>近期记录</p>
-            <h2>工作台摘要</h2>
-          </div>
-          <button>导出CSV</button>
-        </div>
-        <div className="records">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")}>
-              <b>{String(index + 1).padStart(2, "0")}</b>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
+      <section className="workspace">
+        <MonitorPanel state={state} onIngest={(batchId, reading: Reading) => run((at) => ingestReading(state, batchId, reading, at))} />
+        <TimelinePanel state={state} filter={selectedBatch ?? ""} onFilter={(id) => setSelectedBatch(id || null)} />
       </section>
+
+      <ArchivePanel state={state} />
     </main>
   );
 }
